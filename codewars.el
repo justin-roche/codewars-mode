@@ -30,9 +30,37 @@
 ;;
 ;; To set options for Codewars, type M-x customize, then select
 ;; Applications, Codewars.
-;;
 
 ;;; Code:
+(require 'auth-source)
+(defvar credentials nil)
+
+(defun get-credentials (address)
+  (let* ((auth-source-creation-prompts '((user . "Codewars user at %h: ")
+                                         (secret . "Codewars password for %u@%h: ")))
+         (found (nth 0
+                     (auth-source-search :max 1
+                                         :host address
+                                         :require '(:user :secret):create
+                                         t))))
+    (if found
+        (setq credentials (list (plist-get found :user)
+                                (let ((secret (plist-get found :secret)))
+                                  (if (functionp secret)
+                                      (funcall secret)
+                                    secret))
+                                (plist-get found :save-function)))
+      nil)))
+
+(get-credentials "codewars.com")
+(message (concat "codewars user:"
+                 (nth 0 credentials)))
+
+(dz-defservice codewars-puppeteer-service
+               "npm"
+               :args ("start"):cd
+               "~/ref/codewars-puppeteer")
+
 (defvar codewars-server-url "http://localhost:3005/codewars/")
 
 (defvar codewars-language-mode-alist '(("python" . python-mode)
@@ -43,27 +71,28 @@
                                        ("haskell" . haskell-mode)
                                        ("clojure" . clojure-mode)))
 
-(defvar-local result-buffer nil)
-(defvar-local code-buffer nil)
-(defvar-local instruction-buffer nil)
-(defvar-local right-panel nil)
-(defvar-local left-panel nil)
-(defvar-local kata-language-list nil)
-(defvar-local kata-info-data nil)
+(defvar instruction-buffer nil)
+(defvar code-buffer nil)
+(defvar result-buffer nil)
+(defvar right-panel nil)
+(defvar left-panel nil)
+(defvar kata-language-list nil)
+(defvar kata-info-data nil)
 
 (defun codewars ()
   "Start codewars server, create buffers, and setup windows."
   (interactive)
   (create-buffers)
-  (codewars-setup-windows)
+  (setup-windows)
+  (clear-buffers)
   (codewars-start))
 
 ;; BUFFERS/WINDOWS
 
 (defun create-buffers ()
-  (setq result-buffer (get-buffer-create "*results*"))
   (setq instruction-buffer (get-buffer-create "*instructions*"))
   (setq code-buffer (get-buffer-create "*codewars*"))
+  (setq result-buffer (get-buffer-create "*results*"))
   (with-current-buffer result-buffer
     (visual-line-mode))
   (with-current-buffer instruction-buffer
@@ -73,15 +102,19 @@
     (visual-line-mode)
     (codewars-mode)))
 
-(defun codewars-setup-windows ()
+(defun setup-windows ()
   (select-frame-set-input-focus (make-frame))
   (delete-other-windows)
   (switch-to-buffer instruction-buffer)
   (setq left-panel (selected-window))
   (split-window-right-and-focus)
   (switch-to-buffer code-buffer)
-  (setq right-panel (selected-window))
-  (codewars-clear-buffers))
+  (setq right-panel (selected-window)))
+
+(defun codewars-start ()
+  (codewars-puppeteer-service-start)
+  ;; (json-request "/status" 'handle-status-request)
+  )
 
 (defun clear-buffer ()
   "Clear whole buffer add contents to the kill ring."
@@ -89,7 +122,7 @@
   (delete-region (point-min)
                  (point-max)))
 
-(defun codewars-clear-buffers ()
+(defun clear-buffers ()
   (with-current-buffer instruction-buffer
     (clear-buffer))
   (with-current-buffer code-buffer
@@ -110,14 +143,12 @@
 ;; JSON
 
 (defun json-read-data (status)
-  (if (url-http-end-of-headers)
-      (progn
-        (goto-char url-http-end-of-headers)
-        (let ((json-object-type 'alist)
-              (json-key-type 'symbol)
-              (json-array-type 'vector)
-              (result (json-read)))
-          result))))
+  (goto-char url-http-end-of-headers)
+  (let ((json-object-type 'alist)
+        (json-key-type 'symbol)
+        (json-array-type 'vector)
+        (result (json-read)))
+    result))
 
 (defun json-request (endpoint callback &optional data)
   (let ((script (buffer-string))
@@ -136,20 +167,16 @@
 
 ;; Requests
 
-(defun codewars-start ()
-  (testium-start)
-  (json-request "/status" 'handle-status-request))
-
 (defun codewars-load-kata ()
   "Load the last kata."
   (interactive)
-  (codewars-clear-buffers)
+  (clear-buffers)
   (json-request "load" 'handle-kata-data))
 
 (defun codewars-next-kata ()
   "Navigate to the next kata (skip current)."
   (interactive)
-  (codewars-clear-buffers)
+  (clear-buffers)
   (json-request "next" 'handle-kata-data))
 
 (defun codewars-test ()
@@ -195,21 +222,18 @@
           (set-major-mode (cdr (assoc 'info data)))
           (setq kata-info-data (cdr (assoc 'info data)))
           (setq kata-language-list (cdr (assoc 'languages data)))
-          ;; (message (concat status
-
-          ;; (cdr (assoc 'title kata-info-data))))
           (codewars-display-kata-info)))
     (debug)))
 
 (defun handle-test-data (status)
-  (let ((result (json-read-data status))
-        (str (cdr (assoc 'results result))))
+  (let* ((result (json-read-data status))
+         (str (cdr (assoc 'results result))))
     (display-in-buffer str result-buffer)))
 
 (defun set-major-mode (data)
   "Set major mode to match the language in codewars-language-mode-alist based using input DATA."
-  (let ((language (cdr (assoc 'language data)))
-        (mode-function (cdr (assoc language codewars-language-mode-alist))))
+  (let* ((language (cdr (assoc 'language data)))
+         (mode-function (cdr (assoc language codewars-language-mode-alist))))
     (with-current-buffer code-buffer
       (condition-case nil
           (funcall mode-function)
@@ -218,21 +242,19 @@
 (defun codewars-display-kata-info ()
   "Show the info for the current kata."
   (interactive)
-  ;; (debug)
   (princ (stringify-list kata-info-data)))
 
-(defun stringify-list (list)
-  "Print each element of LIST on a line of its own."
-  (setq m "")
-  (dolist (c list)
-    (setq m (concat m
-                    (symbol-name (car c))
-                    ": "
-                    (cdr c)
-                    "
-")))
-  m)
-
+(defun stringify-list (l)
+  "Print each element of L on a line of its own."
+  ;; (debug)
+  (let ((m ""))
+    (dolist (c l)
+      (setq m (concat m
+                      (symbol-name (car c))
+                      ": "
+                      (cdr c)
+                      "\n")))
+    m))
 
 (define-minor-mode codewars-mode
   nil
