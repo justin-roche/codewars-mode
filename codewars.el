@@ -1,4 +1,38 @@
-;; switch to defcustom
+;;; codewars.el --- A emacs interface to codewars
+
+;; Author: J Roche <jproche5@gmail.com>
+;; URL: https://github.com/justin-roche/codewars-mode
+;; Version: 0.0.1
+;; Package-Requires: ((dizzie ))
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+;;; Commentary:
+
+;; To use this file, put something like the following in your
+;; ~/.emacs:
+;;
+;; (add-to-list 'load-path "/directory/containing/codewars/")
+;; (require 'codewars)
+;;
+;; Type M-x codewars to start.
+;;
+;; To set options for Codewars, type M-x customize, then select
+;; Applications, Codewars.
+;;
+
+;;; Code:
 (defvar codewars-server-url "http://localhost:3005/codewars/")
 
 (defvar codewars-language-mode-alist '(("python" . python-mode)
@@ -7,14 +41,22 @@
                                        ("java" . java-mode)
                                        ("c" . c-mode)
                                        ("haskell" . haskell-mode)
-                                       ("clojure" . clojure-mode))) 
+                                       ("clojure" . clojure-mode)))
+
+(defvar-local result-buffer nil)
+(defvar-local code-buffer nil)
+(defvar-local instruction-buffer nil)
+(defvar-local right-panel nil)
+(defvar-local left-panel nil)
+(defvar-local kata-language-list nil)
+(defvar-local kata-info-data nil)
 
 (defun codewars ()
+  "Start codewars server, create buffers, and setup windows."
   (interactive)
-  ;; (create-buffers)
-  ;; (codewars-setup-windows)
-  (codewars-start)
-  )
+  (create-buffers)
+  (codewars-setup-windows)
+  (codewars-start))
 
 ;; BUFFERS/WINDOWS
 
@@ -32,7 +74,6 @@
     (codewars-mode)))
 
 (defun codewars-setup-windows ()
-  (interactive)
   (select-frame-set-input-focus (make-frame))
   (delete-other-windows)
   (switch-to-buffer instruction-buffer)
@@ -43,7 +84,7 @@
   (codewars-clear-buffers))
 
 (defun clear-buffer ()
-  "clear whole buffer add contents to the kill ring"
+  "Clear whole buffer add contents to the kill ring."
   (interactive)
   (delete-region (point-min)
                  (point-max)))
@@ -63,21 +104,10 @@
   (with-current-buffer buffer
     (clear-buffer)
     (insert data)
-    (beginning-of-buffer)
+    (goto-char (point-min))
     (select-window right-panel)))
 
-;; start
-
-
-;; JSON 
-
-(defun json-request (endpoint callback &optional data)
-  (let ((script (buffer-string))
-        (url-request-method "POST")
-        (url-request-extra-headers '(("Content-Type" . "application/json")))
-        (url-request-data data))
-    (url-retrieve (concat codewars-server-url endpoint)
-                  callback)))
+;; JSON
 
 (defun json-read-data (status)
   (if (url-http-end-of-headers)
@@ -88,10 +118,6 @@
               (json-array-type 'vector)
               (result (json-read)))
           result))))
-;; start
-
-
-;; JSON 
 
 (defun json-request (endpoint callback &optional data)
   (let ((script (buffer-string))
@@ -101,39 +127,33 @@
     (url-retrieve (concat codewars-server-url endpoint)
                   callback)))
 
-(defun json-read-data (status)
-  (goto-char url-http-end-of-headers)
-  (let ((json-object-type 'alist)
-        (json-key-type 'symbol)
-        (json-array-type 'vector)
-        (result (json-read)))
-    result))
-
 (defun create-json (symbol value)
-  ;; create a json object with only one field:value pair
+  "Create a json object with only one field:value pair, accepting SYMBOL and VALUE."
   (let ((rq `()))
     (add-to-list `rq
                  (cons symbol value))
     (json-encode rq)))
 
-;; requests 
+;; Requests
 
 (defun codewars-start ()
-  (interactive)
   (testium-start)
   (json-request "/status" 'handle-status-request))
 
 (defun codewars-load-kata ()
+  "Load the last kata."
   (interactive)
   (codewars-clear-buffers)
   (json-request "load" 'handle-kata-data))
 
 (defun codewars-next-kata ()
+  "Navigate to the next kata (skip current)."
   (interactive)
   (codewars-clear-buffers)
   (json-request "next" 'handle-kata-data))
 
 (defun codewars-test ()
+  "Run the example test suite for the current kata and user-entered code."
   (interactive)
   (with-current-buffer code-buffer
     (json-request "test"
@@ -142,6 +162,7 @@
                                (buffer-string)))))
 
 (defun codewars-submit-final ()
+  "Run the final test suite for the current kata and user-entered code."
   (interactive)
   (json-request "submit-final"
                 'handle-test-data
@@ -149,18 +170,19 @@
                              (buffer-string))))
 
 (defun codewars-change-language ()
+  "Change the language for the current kata."
   (interactive)
   (let ((new-language (completing-read "switch to: "
                                        (append kata-language-list nil))))
     (json-request "change-language"
                   'handle-kata-data
-                  (create-json 'language language))))
+                  (create-json 'language new-language))))
+
+;; HELPER FUNCTIONS
 
 (defun handle-status-request (status)
   (switch-to-buffer (current-buffer))
-  (codewars-load-kata)
-
-  )
+  (codewars-load-kata))
 
 (defun handle-kata-data (status)
   (if (eq status nil)
@@ -180,20 +202,21 @@
     (debug)))
 
 (defun handle-test-data (status)
-  (let ((result (json-read-data status)))
-    (setq str (cdr (assoc 'results result)))
+  (let ((result (json-read-data status))
+        (str (cdr (assoc 'results result))))
     (display-in-buffer str result-buffer)))
 
 (defun set-major-mode (data)
-  ;; set major mode to match the language in codewars-language-mode-alist
-  (setq language (cdr (assoc 'language data)))
-  (setq mode-function (cdr (assoc language codewars-language-mode-alist)))
-  (with-current-buffer code-buffer
-    (condition-case nil
-        (funcall mode-function)
-      (error))))
+  "Set major mode to match the language in codewars-language-mode-alist based using input DATA."
+  (let ((language (cdr (assoc 'language data)))
+        (mode-function (cdr (assoc language codewars-language-mode-alist))))
+    (with-current-buffer code-buffer
+      (condition-case nil
+          (funcall mode-function)
+        (error)))))
 
 (defun codewars-display-kata-info ()
+  "Show the info for the current kata."
   (interactive)
   ;; (debug)
   (princ (stringify-list kata-info-data)))
@@ -214,12 +237,10 @@
 (define-minor-mode codewars-mode
   nil
   " CW"
-  ;; The minor mode bindings.
   :keymap (let ((map (make-sparse-keymap)))
             ;; (define-key map (kbd "C-c C-x l") 'codewars-load-kata)
-            ;; (define-key map (kbd "C-c C-x t") 'codewars-test)
-            ;; (define-key map (kbd "C-c C-x n") 'codewars-next-kata)
-            ;; (define-key map (kbd "C-c C-x i") 'codewars-display-kata-info)
-            ;; ;; (define-key map (kbd "C-c C-x n") 'codewars-change-language)
-            ;; (define-key map (kbd "C-c C-x s") 'codewars-submit-final)
             map))
+
+(provide 'codewars)
+
+;;; codewars.el ends here
