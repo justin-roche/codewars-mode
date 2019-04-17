@@ -3,7 +3,7 @@
 ;; Author: J Roche <jproche5@gmail.com>
 ;; URL: https://github.com/justin-roche/codewars-mode
 ;; Version: 0.0.1
-;; Package-Requires: ((dizzie ))
+;; Package-Requires: ((dizzee ))
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -33,43 +33,7 @@
 
 ;;; Code:
 (require 'auth-source)
-(defvar credentials nil)
-
-(defun get-credentials (address)
-  (let* ((auth-source-creation-prompts '((user . "Codewars user at %h: ")
-                                         (secret . "Codewars password for %u@%h: ")))
-         (found (nth 0
-                     (auth-source-search :max 1
-                                         :host address
-                                         :require '(:user :secret):create
-                                         t))))
-    (if found
-        (setq credentials (list (plist-get found :user)
-                                (let ((secret (plist-get found :secret)))
-                                  (if (functionp secret)
-                                      (funcall secret)
-                                    secret))
-                                (plist-get found :save-function)))
-      nil)))
-
-(get-credentials "codewars.com")
-(message (concat "codewars user:"
-                 (nth 0 credentials)))
-
-(dz-defservice codewars-puppeteer-service
-               "npm"
-               :args ("start"):cd
-               "~/ref/codewars-puppeteer")
-
-(defvar codewars-server-url "http://localhost:3005/codewars/")
-
-(defvar codewars-language-mode-alist '(("python" . python-mode)
-                                       ("javascript" . javascript-mode)
-                                       ("ruby" . ruby-mode)
-                                       ("java" . java-mode)
-                                       ("c" . c-mode)
-                                       ("haskell" . haskell-mode)
-                                       ("clojure" . clojure-mode)))
+(require 'dizzee)
 
 (defvar instruction-buffer nil)
 (defvar code-buffer nil)
@@ -78,14 +42,47 @@
 (defvar left-panel nil)
 (defvar kata-language-list nil)
 (defvar kata-info-data nil)
+(defvar codewars-language-mode-alist '(("python" . python-mode)
+                                       ("javascript" . javascript-mode)
+                                       ("ruby" . ruby-mode)
+                                       ("java" . java-mode)
+                                       ("c" . c-mode)
+                                       ("haskell" . haskell-mode)
+                                       ("clojure" . clojure-mode)))
+(defvar codewars-server-url "http://localhost:3005/codewars/")
+(defvar codewars-credentials nil)
+
+(dz-defservice codewars-puppeteer-service
+               "npm"
+               :args ("start"):cd
+               "~/ref/codewars-puppeteer")
+
+;; AUTHORIZATION
+(defun get-auth ()
+  (let ((found (nth 0
+                    (auth-source-search :max 1
+                                        :host "www.codewars.com"))))
+    (setq codewars-credentials (list (plist-get found :user)
+                                     (funcall (plist-get found :secret))))))
+
+
+(setq auth-source-debug 'trivia)
+(get-auth)
+
+(defun codewars-quit ()
+  (interactive)
+  (kill-buffer instruction-buffer)
+  (kill-buffer code-buffer)
+  (kill-buffer result-buffer)
+  (kill-buffer "*codewars-puppeteer-service*"))
 
 (defun codewars ()
   "Start codewars server, create buffers, and setup windows."
   (interactive)
+  (codewars-puppeteer-service-start)
   (create-buffers)
   (setup-windows)
-  (clear-buffers)
-  (codewars-start))
+  (clear-buffers))
 
 ;; BUFFERS/WINDOWS
 
@@ -93,6 +90,7 @@
   (setq instruction-buffer (get-buffer-create "*instructions*"))
   (setq code-buffer (get-buffer-create "*codewars*"))
   (setq result-buffer (get-buffer-create "*results*"))
+  (setq server-buffer (get-buffer-create "*codewars-puppeteer-service*"))
   (with-current-buffer result-buffer
     (visual-line-mode))
   (with-current-buffer instruction-buffer
@@ -111,10 +109,14 @@
   (switch-to-buffer code-buffer)
   (setq right-panel (selected-window)))
 
-(defun codewars-start ()
-  (codewars-puppeteer-service-start)
-  ;; (json-request "/status" 'handle-status-request)
-  )
+;; (defun codewars-start ()
+;; (codewars-puppeteer-service-start)
+;; (with-current-buffer instruction-buffer
+;; (clear-buffer))
+
+;; (codewars-login)
+;; (json-request "/status" 'handle-status-request)
+;; )
 
 (defun clear-buffer ()
   "Clear whole buffer add contents to the kill ring."
@@ -166,6 +168,18 @@
     (json-encode rq)))
 
 ;; Requests
+
+(defun codewars-login ()
+  "Login and resume last kata."
+  (interactive)
+  (clear-buffers)
+  (debug)
+  (let ((password (nth 1 codewars-credentials))
+        (user (nth 0 codewars-credentials)))
+    (json-request "login"
+                  'handle-kata-data
+                  (json-encode `(("user" . ,user)
+                                 ("password" . ,password))))))
 
 (defun codewars-load-kata ()
   "Load the last kata."
